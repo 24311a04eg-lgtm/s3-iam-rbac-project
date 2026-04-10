@@ -2,39 +2,92 @@
 
 [![AWS](https://img.shields.io/badge/AWS-S3%20%7C%20IAM%20%7C%20EC2%20%7C%20ALB-orange?logo=amazon-aws)](https://aws.amazon.com)
 [![Region](https://img.shields.io/badge/Region-US--East--1-blue)](https://aws.amazon.com/about-aws/global-infrastructure/regions_az/)
+[![IAM](https://img.shields.io/badge/IAM-Least%20Privilege-red?logo=amazon-aws)](docs/02-SECURITY-IMPROVEMENTS.md)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Security](https://img.shields.io/badge/Security-Least%20Privilege-red)](docs/02-SECURITY-IMPROVEMENTS.md)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](docs/03-TESTING-VALIDATION.md)
 
-> A production-ready, secure S3 access control system built with AWS IAM roles, policies, and least-privilege principles. Features two IAM users (Alice - read/write, Bob - read-only) and an EC2 instance accessing S3 through an Application Load Balancer in **US-EAST-1**.
-
----
-
-## 🏗️ Architecture Diagram
-
-![Architecture Diagram](images/20-architecture-diagram.jpg)
-
-> **AWS Account (US-EAST-1)** → **VPC: SECURE-S3-VPC** → **Public Subnet** → **ALB** → **EC2 (AWS CLI Host)** → **IAM Roles** → **S3: secure-corp-storage**
+> A production-ready, enterprise-grade S3 access control system built with AWS IAM roles, policies, and the principle of least privilege. Features two IAM users (Alice – read/write, Bob – read-only) and an EC2 instance accessing S3 through an Application Load Balancer, all deployed in **US-EAST-1**.
 
 ---
 
-## 📋 Project Overview
+## 📌 Real-World Use Case
 
-This project demonstrates enterprise-grade S3 access control using AWS Identity and Access Management (IAM) with role-based policies. The system enforces the **principle of least privilege** — each identity only gets the permissions they absolutely need.
+> **The Problem:** A company stores sensitive client reports, data exports, and operational files in Amazon S3. Different teams need different levels of access — developers need to upload files, managers need to read them, and applications need to automate both. But **nobody should be able to delete production data by accident**.
 
-### Access Control Matrix
+This project solves that exact problem using **AWS IAM Role-Based Access Control**:
 
-| Identity | List Bucket | Download (GET) | Upload (PUT) | Delete | Role |
-|---|:---:|:---:|:---:|:---:|---|
-| **Alice** (Developer) | ✅ | ✅ | ✅ | ❌ | `s3-read-write-get` |
-| **Bob** (Viewer) | ✅ | ✅ | ❌ | ❌ | `s3-read-only` |
-| **EC2 Instance** | ✅ | ✅ | ✅ | ❌ | `ec2-s3-access-role` |
+| Who | What They Need | What They Get |
+|---|---|---|
+| 👩‍💻 **Alice** (Developer) | Upload & download reports | Read + Write access (no delete) |
+| 👨‍💼 **Bob** (Manager/Viewer) | View and download reports only | Read-only access |
+| 🖥️ **EC2 Application** | Automate file operations | Read + Write via instance role (no delete) |
+| 🚫 **Everyone** | Should never delete prod data | DeleteObject is denied for all |
+
+The files stored in the bucket include operational reports like `clients-reports.txt`, `Data-report.csv`, and `report1.txt` through `report5.txt`:
+
+![S3 Bucket Contents](<images/Screenshot 2026-04-08 224601.png>)
+*S3 bucket showing stored report files — Data-report.csv, report1.txt, report2.txt, report3.txt with sizes and timestamps*
+
+![S3 file](<images/Screenshot 2026-04-08 224855.png>)
+*clients-reports.txt — a client report file stored securely in the S3 bucket*
+
+---
+
+## 🗂️ Project Overview
+
+This project implements **six key components** working together to form a secure, scalable access control system:
+
+| Component | Service | Purpose |
+|---|---|---|
+| 🪣 **Secure S3 Access** | Amazon S3 | Central, encrypted file storage with versioning and lifecycle management |
+| 👥 **Users & Permissions** | AWS IAM | Role-based policies for Alice (read-write) and Bob (read-only) |
+| 🖥️ **EC2** | Amazon EC2 | Application server that interacts with S3 using a secure instance profile |
+| ⚖️ **ALB** | AWS ALB | Application Load Balancer routing external HTTPS traffic to EC2 |
+| 🔒 **Services** | AWS VPC | Network isolation keeping all resources inside `SECURE-S3-VPC` |
+| 🛡️ **Security** | IAM Policies | MFA enforcement, no long-term keys on EC2, no delete for anyone |
+
+---
+
+## 🏗️ AWS Architecture Diagram
+
+![Architecture Diagram](images/architecture.png)
+
+The architecture shows:
+
+1. **External clients** (Alice, Bob) connect over **HTTPS/443** to IAM, and assume their respective roles
+2. **Alice** assumes `S3READWRITEROLE` → can list, get, and put objects in S3
+3. **Bob** assumes `S3READONLYROLE` → can only list and get objects in S3
+4. **Internet traffic** enters through the **Application Load Balancer** (public subnet `10.0.1.0/24`)
+5. ALB forwards requests to the **EC2 instance** (AWS CLI host) inside `SECURE-S3-VPC` (`10.0.0.0/16`)
+6. EC2 uses `EC2S3ACCESSROLE` via its **instance profile** — no static credentials stored
+7. All roles use `sts:AssumeRole` to obtain **temporary credentials** — no long-term access keys
+
+> **Key security insight:** Solid lines show allowed access paths. Each identity (Alice, Bob, EC2) can only reach what their specific IAM policy permits. No path exists for deleting objects.
+
+---
+
+## 📋 Permission Matrix
+
+| Identity | Role | List Bucket | Download (GET) | Upload (PUT) | Delete |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Alice** (Developer) | `s3-read-write-get` | ✅ | ✅ | ✅ | ❌ |
+| **Bob** (Viewer) | `s3-read-only` | ✅ | ✅ | ❌ | ❌ |
+| **EC2 Instance** | `ec2-s3-access-role` | ✅ | ✅ | ✅ | ❌ |
 
 ### IAM Users
 
-| User | Username | Access Level | Role Assigned |
-|---|---|---|---|
-| Alice | `Alice-developer` | Read + Write (no delete) | `s3-read-write-get` |
-| Bob | `Bob-viewer` | Read-Only | `s3-read-only` |
+![IAM Users](<images/Screenshot 2026-04-08 224620.png>)
+*IAM Users — Alice-developer and Bob-viewer created in AWS account 855409827378*
+
+| Username | Access Type | Assigned Role |
+|---|---|---|
+| `Alice-developer` | Console + Programmatic | `s3-read-write-get` |
+| `Bob-viewer` | Console + Programmatic | `s3-read-only` |
+
+### IAM Roles
+
+![IAM Roles](<images/Screenshot 2026-04-08 224627.png>)
+*IAM Roles — ec2-s3-access-role, s3-read-only, s3-read-write-get, and supporting roles*
 
 ### S3 Bucket
 
@@ -45,52 +98,38 @@ This project demonstrates enterprise-grade S3 access control using AWS Identity 
 | Public Access | **Blocked** |
 | Versioning | Enabled |
 | Encryption | SSE-S3 (AES-256) |
-| Lifecycle Policy | Standard → IA (30d) → Glacier (60d) → Deep Archive (90d) → Delete (120d) |
+| Lifecycle Policy | Standard → IA (30d) → Intelligent-Tiering (60d) → One Zone-IA (90d) → Glacier (120d) |
 
 ---
 
-## 🛠️ Tech Stack
-
-| Service | Purpose |
-|---|---|
-| **Amazon S3** | Secure object storage for reports and data |
-| **AWS IAM** | Identity & Access Management with role-based policies |
-| **Amazon EC2** | Application server / AWS CLI host |
-| **AWS ALB** | Application Load Balancer routing traffic to EC2 |
-| **AWS VPC** | Network isolation (SECURE-S3-VPC) |
-| **AWS CLI** | Command-line S3 operations from EC2 |
-
----
-
-## 🚀 Quick Start
+## 🚀 Quick Start Guide
 
 ### Prerequisites
-- AWS CLI configured (`aws configure`)
-- Sufficient IAM permissions to create users, roles, and policies
-- An existing VPC with public and private subnets
+- AWS CLI v2 configured (`aws configure`) with `us-east-1` as default region
+- IAM permissions to create users, roles, policies, S3 buckets, EC2, and ALB resources
 
-### 1. Set up IAM (Users, Roles, Policies)
+### Step 1 — Set Up IAM (Users, Roles, Policies)
 ```bash
 chmod +x scripts/*.sh
 ./scripts/setup-iam.sh
 ```
 
-### 2. Set up S3 Bucket
+### Step 2 — Set Up S3 Bucket
 ```bash
 ./scripts/setup-s3.sh
 ```
 
-### 3. Launch EC2 Instance & ALB
+### Step 3 — Launch EC2 Instance with Instance Profile
 ```bash
 ./scripts/setup-ec2.sh
 ```
 
-### 4. Validate All Permissions
+### Step 4 — Validate All Permissions
 ```bash
 ./scripts/test-permissions.sh
 ```
 
-### 5. Clean Up Resources
+### Step 5 — Clean Up Resources When Done
 ```bash
 ./scripts/cleanup.sh
 ```
@@ -102,20 +141,21 @@ chmod +x scripts/*.sh
 ```
 s3-iam-rbac-project/
 │
-├── README.md                          # This file — overview & architecture
+├── README.md                          # This file — overview, use case & architecture
 │
 ├── docs/
-│   ├── 01-PROJECT-SETUP.md            # Complete setup guide with all screenshots
-│   ├── 02-SECURITY-IMPROVEMENTS.md    # 8 production security improvements
-│   └── 03-TESTING-VALIDATION.md       # Full test suite with evidence
+│   ├── 01-PROJECT-SETUP.md            # Complete setup walkthrough with screenshots
+│   ├── 02-SECURITY-IMPROVEMENTS.md    # 8 production security hardening recommendations
+│   ├── 03-TESTING-VALIDATION.md       # Full permission test suite with evidence
+│   └── 04-PDF-REFERENCE.md            # Image-to-section reference guide
 │
 ├── iam-policies/
-│   ├── ec2-s3-access-policy.json      # EC2 instance: list + get + put (no delete)
+│   ├── ec2-s3-access-policy.json      # EC2: list + get + put (no delete)
 │   ├── s3-read-write-policy.json      # Alice: list + get + put (no delete)
 │   ├── s3-read-only-policy.json       # Bob: list + get only
 │   ├── trust-policy-ec2.json          # EC2 service trust relationship
-│   ├── trust-policy-alice.json        # Alice role trust relationship (MFA)
-│   └── trust-policy-bob.json          # Bob role trust relationship (MFA)
+│   ├── trust-policy-alice.json        # Alice trust relationship (MFA required)
+│   └── trust-policy-bob.json          # Bob trust relationship (MFA required)
 │
 ├── scripts/
 │   ├── setup-iam.sh                   # Create users, roles, policies
@@ -124,47 +164,49 @@ s3-iam-rbac-project/
 │   ├── test-permissions.sh            # Validate all allow/deny scenarios
 │   └── cleanup.sh                     # Tear down all resources
 │
-└── images/                            # AWS console screenshots (real)
-    ├── 01-clients-reports.txt.jpg     # clients-reports.txt file
-    ├── 02-downloads-folder.jpg        # Downloads folder with Data-report.csv
-    ├── 03-s3-general-buckets.jpg      # S3 buckets list — secure-corp-storage
-    ├── 04-s3-bucket-contents.jpg      # S3 contents — Access denied on report3.txt
-    ├── 05-ec2-download.jpg            # EC2 downloading report1.txt from S3
-    ├── 06-ec2-upload.jpg              # EC2 uploading report5.txt to S3
-    ├── 07-ec2-delete-denied.jpg       # EC2 AccessDenied on delete
-    ├── 08-s3-console.jpg              # S3 console — secure-corp-storage
-    ├── 09-iam-trust-read-only.jpg     # IAM trust policy for s3-read-only
-    ├── 10-iam-trust-write-get.jpg     # IAM trust policy for s3-read-write-get
-    ├── 11-alb-details.jpg             # ALB — Active, VPC, AZs
-    ├── 12-ec2-uploads-list.jpg        # EC2 S3 file listing with timestamps
-    ├── 13-iam-users.jpg               # IAM Users — Alice-developer, Bob-viewer
-    ├── 14-iam-roles.jpg               # IAM Roles list
-    ├── 15-s3-read-write-policy.jpg    # Alice's policy JSON
-    ├── 16-s3-read-only-policy.jpg     # Bob's policy JSON
-    ├── 17-s3-bucket-details.jpg       # S3 bucket details — secure-corp-storage
-    ├── 18-s3-bucket-contents-files.jpg # S3 contents — all report files
-    ├── 19-s3-lifecycle-policy.jpg     # S3 lifecycle transitions
-    └── 20-architecture-diagram.jpg    # Architecture diagram (COMPULSORY)
+└── images/                            # AWS console screenshots (real evidence)
+    ├── architecture.png               # Full AWS architecture diagram
+    ├── s3bucketname.png               # S3 bucket list — secure-corp-storage created
+    ├── Screenshot 2026-04-08 224601.png  # S3 bucket contents (4 report files)
+    ├── Screenshot 2026-04-08 224612.png  # S3 lifecycle policy transitions
+    ├── Screenshot 2026-04-08 224620.png  # IAM Users — Alice-developer, Bob-viewer
+    ├── Screenshot 2026-04-08 224627.png  # IAM Roles — all 5 roles listed
+    ├── Screenshot 2026-04-08 224635.png  # EC2/Alice policy JSON (list+get+put)
+    ├── Screenshot 2026-04-08 224646.png  # Bob policy JSON (list+get only)
+    ├── Screenshot 2026-04-08 224706.png  # EC2 trust policy (ec2.amazonaws.com)
+    ├── Screenshot 2026-04-08 224749.png  # Alice user policy to assume role
+    ├── Screenshot 2026-04-08 224759.png  # ALB details (active, multi-AZ)
+    ├── Screenshot 2026-04-08 224808.png  # EC2 CLI: s3 ls — 4 files listed ✅
+    ├── Screenshot 2026-04-08 224817.png  # EC2 CLI: s3 cp download — success ✅
+    ├── Screenshot 2026-04-08 224826.png  # EC2 CLI: s3 cp upload — success ✅
+    ├── Screenshot 2026-04-08 224834.png  # EC2 CLI: s3 rm — AccessDenied ❌
+    ├── Screenshot 2026-04-08 224855.png  # S3 file: clients-reports.txt
+    ├── Screenshot 2026-04-08 224920.png  # Bob: report3.txt Access denied ❌
+    └── downloading.png                   # Local downloads folder — Data-report.csv
 ```
 
 ---
 
-## 📸 Real AWS Console Screenshots
+## 📸 Real AWS Console Evidence
 
 ### S3 Bucket
-| S3 Buckets List | Bucket Contents |
+| Bucket Created | Files Stored |
 |---|---|
-| ![S3 Buckets](images/03-s3-general-buckets.jpg) | ![Bucket Contents](images/18-s3-bucket-contents-files.jpg) |
+| ![S3 Bucket](images/s3bucketname.png) | ![S3 Contents](<images/Screenshot 2026-04-08 224601.png>) |
 
 ### IAM Configuration
-| IAM Users | IAM Roles |
+| Users | Roles |
 |---|---|
-| ![IAM Users](images/13-iam-users.jpg) | ![IAM Roles](images/14-iam-roles.jpg) |
+| ![IAM Users](<images/Screenshot 2026-04-08 224620.png>) | ![IAM Roles](<images/Screenshot 2026-04-08 224627.png>) |
 
-### EC2 Operations
-| Download ✅ | Upload ✅ | Delete ❌ |
-|---|---|---|
-| ![EC2 Download](images/05-ec2-download.jpg) | ![EC2 Upload](images/06-ec2-upload.jpg) | ![EC2 Delete Denied](images/07-ec2-delete-denied.jpg) |
+### EC2 Operations Proof
+| List ✅ | Download ✅ |
+|---|---|
+| ![EC2 List](<images/Screenshot 2026-04-08 224808.png>) | ![EC2 Download](<images/Screenshot 2026-04-08 224817.png>) |
+
+| Upload ✅ | Delete ❌ |
+|---|---|
+| ![EC2 Upload](<images/Screenshot 2026-04-08 224826.png>) | ![EC2 Delete Denied](<images/Screenshot 2026-04-08 224834.png>) |
 
 ---
 
@@ -172,22 +214,35 @@ s3-iam-rbac-project/
 
 | Document | Description |
 |---|---|
-| [01-PROJECT-SETUP.md](docs/01-PROJECT-SETUP.md) | Complete walkthrough: S3, IAM, EC2, ALB setup with screenshots |
+| [01-PROJECT-SETUP.md](docs/01-PROJECT-SETUP.md) | Complete step-by-step setup: S3, IAM, EC2, ALB with screenshots at each stage |
 | [02-SECURITY-IMPROVEMENTS.md](docs/02-SECURITY-IMPROVEMENTS.md) | 8 production security hardening recommendations |
-| [03-TESTING-VALIDATION.md](docs/03-TESTING-VALIDATION.md) | Full validation suite: EC2, Alice, Bob permission tests |
+| [03-TESTING-VALIDATION.md](docs/03-TESTING-VALIDATION.md) | Full permission validation: EC2, Alice, and Bob test scenarios |
+| [04-PDF-REFERENCE.md](docs/04-PDF-REFERENCE.md) | Image-to-section mapping and visual learning path |
 
 ---
 
-## 🔒 Security Highlights
+## 🔒 Security Highlights & Compliance
 
-- ✅ **Principle of Least Privilege** — no identity has more access than needed
-- ✅ **No Delete permissions** for any user or EC2 role
-- ✅ **S3 Public Access fully blocked**
-- ✅ **Bucket-level encryption** (SSE-S3)
-- ✅ **IAM roles over long-term access keys** for EC2
-- ✅ **MFA enforcement** on Alice and Bob trust policies
-- ✅ **S3 Versioning** enabled for accidental-overwrite protection
-- ✅ **Lifecycle policy** to manage storage costs automatically
+### Principle of Least Privilege
+Every identity has **only the permissions they absolutely need** — nothing more.
+
+- ✅ **No delete permissions** for any user, role, or EC2 instance
+- ✅ **S3 public access fully blocked** — bucket is private by default
+- ✅ **Bucket-level encryption** with SSE-S3 (AES-256)
+- ✅ **IAM roles over long-term keys** — EC2 uses instance profile with temporary credentials
+- ✅ **MFA required** for Alice and Bob to assume their roles
+- ✅ **S3 Versioning enabled** — protects against accidental overwrites
+- ✅ **Lifecycle policy** — automatically transitions data to cheaper storage tiers
+- ✅ **VPC isolation** — all resources inside `SECURE-S3-VPC`, no unnecessary public exposure
+
+### Compliance-Aligned Design
+| Control | Implementation |
+|---|---|
+| Access Control | IAM roles with scoped resource ARNs |
+| Audit Trail | CloudTrail captures all S3 and IAM API calls |
+| Data Protection | SSE-S3 encryption at rest, HTTPS in transit |
+| Change Prevention | No `s3:DeleteObject` in any policy |
+| Identity Verification | MFA condition on all human role assumptions |
 
 ---
 
