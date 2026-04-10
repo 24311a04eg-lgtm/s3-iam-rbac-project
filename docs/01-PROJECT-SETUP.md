@@ -1,52 +1,57 @@
-# 📖 Project Setup Guide
+# 📖 Complete Project Setup Guide
 
-Complete walkthrough for building the AWS S3 IAM Role-Based Access Control system from scratch.
+Step-by-step walkthrough for building the AWS S3 IAM Role-Based Access Control (RBAC) system, following the exact sequence from architecture design through live testing.
 
 ---
 
 ## Table of Contents
 
-1. [Introduction & Use Case](#1-introduction--use-case)
+1. [Use Case: Real-World Scenario](#1-use-case-real-world-scenario)
 2. [Architecture Overview](#2-architecture-overview)
-3. [AWS Services Overview](#3-aws-services-overview)
-4. [Prerequisites](#4-prerequisites)
-5. [S3 Bucket Configuration](#5-s3-bucket-configuration)
-6. [IAM Design & Implementation](#6-iam-design--implementation)
-7. [EC2 Instance Setup](#7-ec2-instance-setup)
-8. [Application Load Balancer Setup](#8-application-load-balancer-setup)
-9. [Testing & Validation](#9-testing--validation)
-10. [Summary](#10-summary)
+3. [Prerequisites](#3-prerequisites)
+4. [S3 Bucket Configuration](#4-s3-bucket-configuration)
+5. [IAM Design & Implementation](#5-iam-design--implementation)
+6. [EC2 Instance Setup](#6-ec2-instance-setup)
+7. [Application Load Balancer Setup](#7-application-load-balancer-setup)
+8. [Testing & Validation](#8-testing--validation)
+9. [Summary](#9-summary)
 
 ---
 
-## 1. Introduction & Use Case
+## 1. Use Case: Real-World Scenario
 
-### What We're Building
+### The Problem
 
-A **secure, production-ready S3 access control system** for a corporate environment where:
+Organizations manage sensitive files in Amazon S3 every day — client reports, financial exports, operational data. The challenge is ensuring that **the right people have the right access, and nothing more**.
 
-- **Employees** (Alice, Bob) need controlled access to company reports stored in S3
-- **Applications** running on EC2 need to read and write files to S3
-- **Security team** requires full audit trails and no accidental data deletion
-- **Compliance** demands the principle of least privilege at all times
+Without proper access controls:
+- A developer might accidentally delete a critical file
+- A read-only analyst could overwrite data they shouldn't touch
+- An EC2 server could become a point of attack if it had overly broad permissions
 
-### Real-World Use Case
+### What This Project Solves
 
-A company stores client reports, data exports, and operational files in an S3 bucket called `secure-corp-storage`. The access rules are:
+This project implements **Role-Based Access Control (RBAC)** for an S3 bucket called `secure-corp-storage` in a company called SecureCorp.
 
-| Identity | Can List | Can Download | Can Upload | Can Delete |
-|---|:---:|:---:|:---:|:---:|
-| Alice (Developer) | ✅ | ✅ | ✅ | ❌ |
-| Bob (Viewer) | ✅ | ✅ | ❌ | ❌ |
-| EC2 Application | ✅ | ✅ | ✅ | ❌ |
+| Who | What They Need | What They Get |
+|:---|:---|:---|
+| 👩‍💻 **Alice** (Developer) | Upload reports, download files, view all objects | `s3:ListBucket` + `s3:GetObject` + `s3:PutObject` — **no delete** |
+| 👨‍💼 **Bob** (Viewer/Analyst) | Download files for analysis, view bucket contents | `s3:ListBucket` + `s3:GetObject` — **no upload, no delete** |
+| 🖥️ **EC2 Application** | Read and write files programmatically | `s3:ListBucket` + `s3:GetObject` + `s3:PutObject` — **no delete** |
 
-The S3 bucket contains files like:
+> ⚠️ **Key Design Decision:** No identity — not even the EC2 server — can delete S3 objects. This prevents accidental data loss and protects against malicious activity.
 
-![S3 Bucket Contents](../images/01-clients-reports.txt.jpg)
-*clients-reports.txt — one of the files stored in the secure-corp-storage bucket (January 31, 2026)*
+### Files Stored in the Bucket
 
-![Downloads Folder](../images/02-downloads-folder.jpg)
-*Local Downloads folder showing Data-report.csv — a file downloaded from S3*
+The bucket `secure-corp-storage` contains operational files like:
+
+![clients-reports.txt in S3](../images/Screenshot%202026-04-08%20224855.png)
+*`clients-reports.txt` visible in the S3 bucket — January 31, 2026*
+
+After Alice downloads Data-report.csv, it appears in her local Downloads folder:
+
+![Downloads folder with Data-report.csv](../images/downloading.png)
+*Local Downloads folder showing `Data-report.csv` — successfully downloaded from S3*
 
 ---
 
@@ -54,88 +59,88 @@ The S3 bucket contains files like:
 
 ### Architecture Diagram
 
-![Architecture Diagram](../images/20-architecture-diagram.jpg)
+![AWS Architecture Diagram](../images/architecture.png)
 
-### Component Breakdown
+*Complete AWS architecture: Users access S3 through IAM roles (dashed lines = IAM permission grants via `sts:AssumeRole`). The EC2 instance lives inside VPC `SECURE-S3-VPC` behind the Application Load Balancer.*
+
+### How It All Connects
 
 ```
 AWS Account (US-EAST-1)
-└── VPC: SECURE-S3-VPC
+│
+├── IAM (Global Service)
+│   ├── Alice-developer ──(sts:AssumeRole)──▶ s3-read-write-get role
+│   │                                          └─▶ S3: ListBucket + GetObject + PutObject
+│   └── Bob-viewer ──(sts:AssumeRole)──▶ s3-read-only role
+│                                         └─▶ S3: ListBucket + GetObject
+│
+└── VPC: SECURE-S3-VPC (10.0.0.0/16)
     ├── Public Subnet
     │   └── Application Load Balancer (ALB)
-    │       └── Routes HTTPS traffic → EC2
-    ├── Private Subnet
-    │   └── EC2 Instance (AWS CLI Host)
-    │       ├── IAM Instance Profile: ec2-s3-access-role
-    │       └── Performs: LIST, GET, PUT on S3
-    └── IAM (Global)
-        ├── Users
-        │   ├── Alice-developer → s3-read-write-get role
-        │   └── Bob-viewer      → s3-read-only role
-        └── Roles
-            ├── s3-read-write-get  (Alice: LIST + GET + PUT)
-            ├── s3-read-only       (Bob: LIST + GET)
-            └── ec2-s3-access-role (EC2: LIST + GET + PUT)
+    │       ├── Scheme: Internet-facing
+    │       ├── AZs: us-east-1a, us-east-1d
+    │       └── Routes HTTPS → EC2
+    └── Private Subnet
+        └── EC2 Instance (s3-cli-host)
+            ├── IAM Instance Profile: ec2-s3-access-role
+            └── S3 Access: ListBucket + GetObject + PutObject (no delete)
 
 S3 Bucket: secure-corp-storage
-├── Versioning: Enabled
+├── Region: us-east-1
 ├── Public Access: Blocked
-├── Encryption: SSE-S3
-└── Lifecycle: Standard → IA → Glacier → Deep Archive → Delete
+├── Versioning: Enabled
+├── Encryption: SSE-S3 (AES-256)
+└── Lifecycle: Standard → IA(30d) → Intelligent-Tiering(60d) → One Zone-IA(90d) → Glacier(120d)
 ```
 
-### Data Flow
+**Arrow key:**
+- **Solid HTTPS arrows** = network traffic (requests to ALB/S3)
+- **Dashed arrows** = IAM permission grants (`sts:AssumeRole`)
 
-1. **Client request** arrives at the **ALB** (Application Load Balancer)
-2. ALB routes traffic to the **EC2 instance** in the private subnet
-3. EC2 uses its **IAM instance profile** (`ec2-s3-access-role`) to authenticate with S3
-4. **No long-term credentials** stored on EC2 — IAM role provides temporary credentials
-5. EC2 can **list, download, and upload** files but **cannot delete** them
-6. **Alice** assumes the `s3-read-write-get` role to manage files via console or CLI
-7. **Bob** assumes the `s3-read-only` role for read-only access via console or CLI
+### Traffic Flow
 
----
-
-## 3. AWS Services Overview
-
-| Service | Role in This Project | Configuration |
-|---|---|---|
-| **Amazon S3** | Central file storage | Bucket: `secure-corp-storage`, versioning + encryption |
-| **AWS IAM** | Access control engine | 3 roles, 2 users, 6 policies |
-| **Amazon EC2** | Application/CLI host | AL2023, private subnet, instance profile |
-| **AWS ALB** | Load balancer & entry point | Active, multi-AZ, us-east-1a + us-east-1d |
-| **Amazon VPC** | Network isolation | `SECURE-S3-VPC` with public/private subnets |
+1. Alice or Bob authenticates via HTTPS and calls `sts:AssumeRole` to get temporary credentials for their assigned role
+2. External traffic arrives at the **ALB** and is routed to the **EC2 instance**
+3. EC2 uses its **IAM Instance Profile** (`ec2-s3-access-role`) for automatic credential rotation — no static keys stored
+4. All S3 API calls are authorized against the IAM policies attached to each role
 
 ---
 
-## 4. Prerequisites
+## 3. Prerequisites
 
 ### Required Tools
-```bash
-# AWS CLI v2
-aws --version
-# aws-cli/2.x.x Python/3.x.x
 
-# Configure credentials
+```bash
+# Verify AWS CLI v2 is installed
+aws --version
+# Expected: aws-cli/2.x.x Python/3.x.x
+
+# Configure credentials (run once)
 aws configure
-# AWS Access Key ID: [your key]
-# AWS Secret Access Key: [your secret]
+# AWS Access Key ID: [your-admin-key]
+# AWS Secret Access Key: [your-admin-secret]
 # Default region name: us-east-1
 # Default output format: json
 ```
 
-### Required Permissions (for setup)
-Your IAM user/role needs:
-- `iam:CreateUser`, `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`
-- `s3:CreateBucket`, `s3:PutBucketPolicy`, `s3:PutLifecycleConfiguration`
-- `ec2:RunInstances`, `ec2:CreateSecurityGroup`
-- `elasticloadbalancing:CreateLoadBalancer`
+### Required IAM Permissions (for your setup user/role)
+
+```
+iam:CreateUser, iam:CreateRole, iam:PutRolePolicy, iam:AttachRolePolicy
+s3:CreateBucket, s3:PutBucketPolicy, s3:PutLifecycleConfiguration
+ec2:RunInstances, ec2:CreateSecurityGroup, iam:CreateInstanceProfile
+elasticloadbalancing:CreateLoadBalancer, elasticloadbalancing:CreateTargetGroup
+```
 
 ---
 
-## 5. S3 Bucket Configuration
+## 4. S3 Bucket Configuration
 
-### 5.1 Create the Bucket
+### Why S3 is the Central Storage
+
+Amazon S3 (`secure-corp-storage`) is the heart of this architecture. All IAM roles and policies are scoped specifically to this bucket — ensuring that no identity accidentally accesses any other S3 resource in the account.
+
+### 4.1 Create the Bucket
 
 ```bash
 # Create bucket in us-east-1
@@ -143,22 +148,26 @@ aws s3api create-bucket \
   --bucket secure-corp-storage \
   --region us-east-1
 
-# Block ALL public access
+# Block ALL public access (most important security step)
 aws s3api put-public-access-block \
   --bucket secure-corp-storage \
   --public-access-block-configuration \
     "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
 ```
 
-### 5.2 S3 Bucket in AWS Console
+### 4.2 S3 Bucket in AWS Console
 
-![S3 General Buckets](../images/03-s3-general-buckets.jpg)
-*S3 console showing secure-corp-storage bucket in US East (N. Virginia)*
+After creating the bucket, it appears in the S3 general purpose buckets list:
 
-![S3 Bucket Details](../images/17-s3-bucket-details.jpg)
-*Detailed view of the secure-corp-storage bucket properties*
+![S3 Bucket List](../images/s3bucketname.png)
+*S3 console — `secure-corp-storage` general purpose bucket, account ID 855409827378*
 
-### 5.3 Enable Versioning
+After uploading the initial files, the bucket contents look like this:
+
+![S3 Bucket Contents](../images/Screenshot%202026-04-08%20224601.png)
+*S3 bucket objects: `Data-report.csv` (184 B), `report1.txt` (97 B), `report2.txt` (106 B), `report3.txt` — all uploaded January 31, 2026*
+
+### 4.3 Enable Versioning
 
 ```bash
 aws s3api put-bucket-versioning \
@@ -166,7 +175,9 @@ aws s3api put-bucket-versioning \
   --versioning-configuration Status=Enabled
 ```
 
-### 5.4 Enable Default Encryption
+Versioning protects against accidental overwrites — if a file is replaced, the previous version is retained.
+
+### 4.4 Enable Default Encryption
 
 ```bash
 aws s3api put-bucket-encryption \
@@ -181,7 +192,9 @@ aws s3api put-bucket-encryption \
   }'
 ```
 
-### 5.5 Configure Lifecycle Policy
+### 4.5 Configure Lifecycle Policy
+
+The lifecycle policy automatically moves objects through storage tiers to optimize costs, then deletes them after 120 days:
 
 ```bash
 aws s3api put-bucket-lifecycle-configuration \
@@ -189,37 +202,42 @@ aws s3api put-bucket-lifecycle-configuration \
   --lifecycle-configuration file://lifecycle.json
 ```
 
-![S3 Lifecycle Policy](../images/19-s3-lifecycle-policy.jpg)
-*Lifecycle policy: Standard → Infrequent Access (30d) → Glacier (60d) → Deep Archive (90d) → Delete (120d)*
+![S3 Lifecycle Policy Timeline](../images/Screenshot%202026-04-08%20224612.png)
 
-### 5.6 Bucket Contents
+*Lifecycle timeline:*
+- **Day 0** — Objects uploaded (Standard storage)
+- **Day 30** — Move to Standard-IA (Infrequent Access) — cheaper for rarely accessed data
+- **Day 60** — Move to Intelligent-Tiering — automatic tiering based on access patterns
+- **Day 90** — Move to One Zone-IA — even cheaper, single-AZ storage
+- **Day 120** — Move to Glacier Flexible Retrieval — archival storage for compliance
 
-After uploading test files:
+### 4.6 Files Stored in the Bucket
 
-![S3 Bucket Contents](../images/04-s3-bucket-contents.jpg)
-*S3 bucket contents showing report3.txt — Access Denied error demonstrates policy enforcement*
+The bucket holds the following operational files:
 
-![S3 Console](../images/08-s3-console.jpg)
-*S3 console view of secure-corp-storage bucket*
-
-![S3 Files](../images/18-s3-bucket-contents-files.jpg)
-*All files in the bucket: Data-report.csv, report1.txt, report2.txt, report3.txt, report5.txt*
+| File | Size | Purpose |
+|:---|:---|:---|
+| `Data-report.csv` | 184 B | Primary data export for business analysis |
+| `report1.txt` | 97 B | Operational report #1 |
+| `report2.txt` | 106 B | Operational report #2 |
+| `report3.txt` | 134 B | Operational report #3 |
+| `clients-reports.txt` | — | Client-facing report summary |
 
 ---
 
-## 6. IAM Design & Implementation
+## 5. IAM Design & Implementation
 
-### 6.1 IAM Users
+### Overview
 
-Two IAM users have been created:
+Three IAM identities need access to S3, each with a different permission level:
 
-![IAM Users](../images/13-iam-users.jpg)
-*IAM Users: Alice-developer and Bob-viewer*
+| Identity | IAM Role | Permissions |
+|:---|:---|:---|
+| 👩‍💻 Alice | `s3-read-write-get` | ListBucket + GetObject + PutObject |
+| 👨‍💼 Bob | `s3-read-only` | ListBucket + GetObject |
+| 🖥️ EC2 | `ec2-s3-access-role` | ListBucket + GetObject + PutObject |
 
-| Username | Access Type | Assigned Role |
-|---|---|---|
-| `Alice-developer` | Programmatic + Console | `s3-read-write-get` |
-| `Bob-viewer` | Programmatic + Console | `s3-read-only` |
+### 5.1 Create IAM Users
 
 ```bash
 # Create Alice
@@ -229,59 +247,103 @@ aws iam create-user --user-name Alice-developer
 aws iam create-user --user-name Bob-viewer
 ```
 
-### 6.2 IAM Roles
+After creation, both users appear in the IAM console:
 
-![IAM Roles](../images/14-iam-roles.jpg)
-*IAM Roles: ec2-s3-access-role, rds-proxy-role, s3-read-only, s3-read-write-get, ssm-role*
+![IAM Users](../images/Screenshot%202026-04-08%20224620.png)
+*IAM Users console: `Alice-developer` and `Bob-viewer` successfully created*
 
-Five roles are configured:
+### 5.2 IAM Roles Created
+
+After creating all roles, the IAM Roles console shows:
+
+![IAM Roles List](../images/Screenshot%202026-04-08%20224627.png)
+*IAM Roles: `ec2-s3-access-role`, `rds-proxy-role`, `s3-read-only`, `s3-read-write-get`, `ssm-role`*
 
 | Role Name | Purpose | Trusted By |
-|---|---|---|
-| `ec2-s3-access-role` | EC2 instance profile for S3 access | EC2 service |
-| `s3-read-write-get` | Alice's role — list + get + put | Alice-developer (MFA required) |
-| `s3-read-only` | Bob's role — list + get only | Bob-viewer (MFA required) |
-| `rds-proxy-role` | RDS Proxy service role | RDS service |
-| `ssm-role` | Systems Manager access | EC2 service |
+|:---|:---|:---|
+| `ec2-s3-access-role` | EC2 instance profile — S3 access | EC2 service (`ec2.amazonaws.com`) |
+| `s3-read-write-get` | Alice — list + get + put | `Alice-developer` user (MFA required) |
+| `s3-read-only` | Bob — list + get only | `Bob-viewer` user (MFA required) |
 
-### 6.3 Alice's Policy (s3-read-write-get)
+### 5.3 EC2 Role Policy (`ec2-s3-access-role`)
 
-![S3 Read-Write Policy](../images/15-s3-read-write-policy.jpg)
-*Alice's IAM policy: ListBucket + GetObject + PutObject on secure-corp-storage*
+The EC2 instance gets `ListBucket`, `GetObject`, and `PutObject` — but **not** `DeleteObject`:
+
+![EC2 IAM Policy JSON](../images/Screenshot%202026-04-08%20224635.png)
+*EC2 access policy JSON: `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` on `secure-corp-storage`*
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "AllowListBucket",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::secure-corp-storage"
     },
     {
+      "Sid": "AllowGetAndPutObjects",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
       "Resource": "arn:aws:s3:::secure-corp-storage/*"
     }
   ]
 }
 ```
 
-### 6.4 Bob's Policy (s3-read-only)
+### 5.4 Alice's Policy (`s3-read-write-get`)
 
-![S3 Read-Only Policy](../images/16-s3-read-only-policy.jpg)
-*Bob's IAM policy: ListBucket + GetObject only on secure-corp-storage*
+Alice has the same permissions as EC2 — she can list, read, and upload, but cannot delete:
+
+![Alice's Read-Write Policy JSON](../images/Screenshot%202026-04-08%20224706.png)
+*Alice's IAM policy: `s3:ListBucket` + `s3:GetObject` + `s3:PutObject` on `secure-corp-storage`*
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "AllowListBucket",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::secure-corp-storage"
     },
     {
+      "Sid": "AllowGetAndPutObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::secure-corp-storage/*"
+    }
+  ]
+}
+```
+
+### 5.5 Bob's Policy (`s3-read-only`)
+
+Bob gets read-only access — he can view and download files but cannot upload or delete:
+
+![Bob's Read-Only Policy JSON](../images/Screenshot%202026-04-08%20224646.png)
+*Bob's IAM policy: `s3:ListBucket` + `s3:GetObject` only — no PutObject, no DeleteObject*
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowListBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::secure-corp-storage"
+    },
+    {
+      "Sid": "AllowGetObject",
       "Effect": "Allow",
       "Action": "s3:GetObject",
       "Resource": "arn:aws:s3:::secure-corp-storage/*"
@@ -290,10 +352,14 @@ Five roles are configured:
 }
 ```
 
-### 6.5 Trust Policy — Alice's Role
+### 5.6 Trust Policy & Role ARN
 
-![IAM Trust Policy Read-Only](../images/09-iam-trust-read-only.jpg)
-*Trust policy for s3-read-only role — allows AssumeRole*
+The trust policy controls **who can assume a role**. For Alice and Bob, users must present MFA to assume their roles. This screenshot shows the trust policy allowing `sts:AssumeRole` on the `s3-read-write-get` role (with its real ARN):
+
+![Trust Policy with Role ARN](../images/Screenshot%202026-04-08%20224749.png)
+*Trust/permissions policy showing `sts:AssumeRole` on `arn:aws:iam::855409827378:role/s3-read-write-get`*
+
+The trust policy for Alice's role (`iam-policies/trust-policy-alice.json`):
 
 ```json
 {
@@ -315,10 +381,7 @@ Five roles are configured:
 }
 ```
 
-### 6.6 Trust Policy — Bob's Role
-
-![IAM Trust Policy Write-Get](../images/10-iam-trust-write-get.jpg)
-*Trust policy for s3-read-write-get role — allows AssumeRole*
+The trust policy for Bob's role (`iam-policies/trust-policy-bob.json`):
 
 ```json
 {
@@ -340,63 +403,62 @@ Five roles are configured:
 }
 ```
 
-### 6.7 Create Roles
+### 5.7 Create All Roles via CLI
 
 ```bash
-# Create Alice's role
+# ── Alice's role ──────────────────────────────────────────
 aws iam create-role \
   --role-name s3-read-write-get \
   --assume-role-policy-document file://iam-policies/trust-policy-alice.json
 
-# Attach Alice's permission policy
 aws iam put-role-policy \
   --role-name s3-read-write-get \
   --policy-name S3ReadWritePolicy \
   --policy-document file://iam-policies/s3-read-write-policy.json
 
-# Create Bob's role
+# ── Bob's role ────────────────────────────────────────────
 aws iam create-role \
   --role-name s3-read-only \
   --assume-role-policy-document file://iam-policies/trust-policy-bob.json
 
-# Attach Bob's permission policy
 aws iam put-role-policy \
   --role-name s3-read-only \
   --policy-name S3ReadOnlyPolicy \
   --policy-document file://iam-policies/s3-read-only-policy.json
-```
 
----
-
-## 7. EC2 Instance Setup
-
-### 7.1 Create EC2 IAM Role
-
-```bash
-# Create EC2 role
+# ── EC2 role ──────────────────────────────────────────────
 aws iam create-role \
   --role-name ec2-s3-access-role \
   --assume-role-policy-document file://iam-policies/trust-policy-ec2.json
 
-# Attach EC2 S3 access policy
 aws iam put-role-policy \
   --role-name ec2-s3-access-role \
   --policy-name EC2S3AccessPolicy \
   --policy-document file://iam-policies/ec2-s3-access-policy.json
+```
 
+---
+
+## 6. EC2 Instance Setup
+
+### 6.1 Create Instance Profile
+
+The EC2 instance profile links the `ec2-s3-access-role` to the EC2 instance, providing automatic temporary credential rotation:
+
+```bash
 # Create instance profile
-aws iam create-instance-profile --instance-profile-name ec2-s3-access-profile
+aws iam create-instance-profile \
+  --instance-profile-name ec2-s3-access-profile
 
-# Add role to profile
+# Link the role to the profile
 aws iam add-role-to-instance-profile \
   --instance-profile-name ec2-s3-access-profile \
   --role-name ec2-s3-access-role
 ```
 
-### 7.2 Launch EC2 Instance
+### 6.2 Launch EC2 Instance
 
 ```bash
-# Launch instance with instance profile
 aws ec2 run-instances \
   --image-id ami-0c02fb55956c7d316 \
   --instance-type t3.micro \
@@ -406,26 +468,34 @@ aws ec2 run-instances \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=s3-cli-host}]'
 ```
 
+> **No hardcoded credentials.** The instance profile means the EC2 instance automatically receives temporary STS credentials that rotate every hour — no `~/.aws/credentials` file needed.
+
 ---
 
-## 8. Application Load Balancer Setup
+## 7. Application Load Balancer Setup
 
-### 8.1 ALB Details
+### What the ALB Does
 
-![ALB Details](../images/11-alb-details.jpg)
-*Application Load Balancer — Active status, multi-AZ (us-east-1a, us-east-1d)*
+The Application Load Balancer (ALB) sits in the public subnet of `SECURE-S3-VPC` and acts as the **entry point for all user traffic**. It routes HTTPS requests to the EC2 instance in the private subnet, keeping EC2 off the public internet.
 
-The ALB is configured with:
-- **State:** Active
-- **VPC:** SECURE-S3-VPC
-- **Availability Zones:** us-east-1a, us-east-1d
-- **Scheme:** Internet-facing (public)
-- **Type:** Application Load Balancer
+### 7.1 ALB Console Details
 
-### 8.2 Create ALB
+![ALB Details](../images/Screenshot%202026-04-08%20224759.png)
+*ALB console: `Application` type, `active` status, VPC `SECURE-S3-VPC`, internet-facing scheme, covering `us-east-1a` and `us-east-1d` availability zones*
+
+| Property | Value |
+|:---|:---|
+| **Type** | Application Load Balancer |
+| **State** | Active ✅ |
+| **VPC** | SECURE-S3-VPC (`vpc-0b81859c003a21abf`) |
+| **Scheme** | Internet-facing |
+| **Availability Zones** | us-east-1a (subnet-0de6f808e30f1cac1), us-east-1d (subnet-0008ec13130af01bf) |
+| **Hosted Zone** | Z35SXDOTRQ7X7K |
+
+### 7.2 Create the ALB
 
 ```bash
-# Create ALB
+# Create the load balancer
 aws elbv2 create-load-balancer \
   --name secure-s3-alb \
   --subnets subnet-PUBLIC-1A subnet-PUBLIC-1D \
@@ -433,7 +503,7 @@ aws elbv2 create-load-balancer \
   --scheme internet-facing \
   --type application
 
-# Create target group
+# Create target group pointing to EC2
 aws elbv2 create-target-group \
   --name ec2-s3-targets \
   --protocol HTTP \
@@ -441,113 +511,108 @@ aws elbv2 create-target-group \
   --vpc-id vpc-XXXXXXXX \
   --health-check-path /health
 
-# Register EC2 instance
+# Register the EC2 instance as a target
 aws elbv2 register-targets \
   --target-group-arn arn:aws:elasticloadbalancing:us-east-1:ACCOUNT_ID:targetgroup/ec2-s3-targets/XXXX \
   --targets Id=i-XXXXXXXXXXXXXXXX
 
-# Create listener
+# Create HTTP listener (forward to target group)
 aws elbv2 create-listener \
   --load-balancer-arn arn:aws:elasticloadbalancing:us-east-1:ACCOUNT_ID:loadbalancer/app/secure-s3-alb/XXXX \
   --protocol HTTP \
   --port 80 \
-  --default-actions Type=forward,TargetGroupArn=arn:aws:elasticloadbalancing:...
+  --default-actions Type=forward,TargetGroupArn=arn:aws:elasticloadbalancing:us-east-1:ACCOUNT_ID:targetgroup/ec2-s3-targets/XXXX
 ```
 
 ---
 
-## 9. Testing & Validation
+## 8. Testing & Validation
 
-### Scenario 1: EC2 Download (PASS ✅)
+This section validates all permission scenarios from the EC2 instance and both IAM users. Every test was run against the live AWS environment.
 
-EC2 can download files from S3 using its instance role:
+---
 
-![EC2 Download](../images/05-ec2-download.jpg)
-*EC2 downloading report1.txt from S3 — operation succeeds*
+### 8.1 EC2 Testing
+
+The EC2 instance (`ip-10-0-7-186`) uses the `ec2-s3-access-role` instance profile. The following tests were run via AWS CLI directly on the EC2 instance.
+
+#### ✅ EC2 — List Files
 
 ```bash
-# On EC2 instance
-aws s3 cp s3://secure-corp-storage/report1.txt ./report1.txt
-# download: s3://secure-corp-storage/report1.txt to ./report1.txt
+[ec2-user@ip-10-0-7-186 ~]$ aws s3 ls s3://secure-corp-storage/
 ```
 
-### Scenario 2: EC2 Upload (PASS ✅)
+![EC2 File Listing](../images/Screenshot%202026-04-08%20224808.png)
+*EC2 successfully lists all objects: `Uploads/Data-report.csv` (184 B), `Uploads/report1.txt` (97 B), `Uploads/report2.txt` (106 B), `Uploads/report3.txt` (134 B) — January 31, 2026*
 
-EC2 can upload new files to S3:
-
-![EC2 Upload](../images/06-ec2-upload.jpg)
-*EC2 uploading report5.txt to S3 — operation succeeds*
+#### ✅ EC2 — Download File
 
 ```bash
-echo "Report 5 content" > report5.txt
-aws s3 cp report5.txt s3://secure-corp-storage/report5.txt
-# upload: ./report5.txt to s3://secure-corp-storage/report5.txt
+[ec2-user@ip-10-0-7-186 ~]$ aws s3 cp s3://secure-corp-storage/report1.txt .
 ```
 
-### Scenario 3: EC2 Delete (DENIED ❌)
+![EC2 Download](../images/Screenshot%202026-04-08%20224817.png)
+*EC2 downloads `report1.txt` successfully: `download: s3://secure-corp-storage/report1.txt to ./report1.txt`*
 
-EC2 correctly receives AccessDenied when attempting to delete:
-
-![EC2 Delete Denied](../images/07-ec2-delete-denied.jpg)
-*EC2 attempting to delete Data-report.csv — AccessDenied as expected*
+#### ✅ EC2 — Upload File
 
 ```bash
-aws s3 rm s3://secure-corp-storage/Data-report.csv
+[ec2-user@ip-10-0-7-186 ~]$ nano report5.txt
+[ec2-user@ip-10-0-7-186 ~]$ aws s3 cp /home/ec2-user/report5.txt s3://secure-corp-storage/
+```
+
+![EC2 Upload](../images/Screenshot%202026-04-08%20224826.png)
+*EC2 uploads `report5.txt` successfully: `upload: ./report5.txt to s3://secure-corp-storage/report5.txt`*
+
+#### ❌ EC2 — Delete Attempt (AccessDenied)
+
+```bash
+[ec2-user@ip-10-0-7-186 ~]$ aws s3 rm s3://secure-corp-storage/Data-report.csv
+```
+
+![EC2 Delete Denied](../images/Screenshot%202026-04-08%20224834.png)
+*EC2 delete attempt fails: `delete failed: s3://secure-corp-storage/Data-report.csv — An error occurred (AccessDenied) when calling the DeleteObject operation: arn:aws:sts::855409827378:assumed-role/ec2-s3-access-role/i-0fd9fbf94b8147f5e is not authorized`*
+
+> This confirms the IAM policy is working correctly — the EC2 role has no `s3:DeleteObject` permission.
+
+---
+
+### 8.2 Alice Testing (Read-Write via AWS Console)
+
+Alice uses the AWS Management Console with her `s3-read-write-get` role assumed via `sts:AssumeRole`.
+
+#### ✅ Alice — Can See the Bucket
+
+![Alice Sees Bucket](../images/s3bucketname.png)
+*Alice navigates to S3 in the AWS console and can see `secure-corp-storage` — the bucket is visible because her role has `s3:ListBucket`*
+
+#### ✅ Alice — Can See Files in the Bucket
+
+![Alice Sees Files](../images/Screenshot%202026-04-08%20224855.png)
+*Alice can see `clients-reports.txt` inside the bucket (January 31, 2026, 22:00:56 UTC+05:30) — confirming read access*
+
+#### ✅ Alice — Can Download Files
+
+![Alice Downloads File](../images/downloading.png)
+*Alice's local Downloads folder shows `Data-report.csv` successfully downloaded from `secure-corp-storage`*
+
+#### ❌ Alice — Cannot Delete (policy blocks `s3:DeleteObject`)
+
+```bash
+# Alice attempts delete via CLI after assuming her role
+aws s3 rm s3://secure-corp-storage/report1.txt
 # An error occurred (AccessDenied) when calling the DeleteObject operation: Access Denied
 ```
 
-### Scenario 4: EC2 File Listing (PASS ✅)
+Alice's `s3-read-write-get` policy only contains `s3:GetObject` and `s3:PutObject` — there is no `s3:DeleteObject`, so delete is **implicitly denied**.
 
-EC2 can list all files in the bucket:
+---
 
-![EC2 Uploads List](../images/12-ec2-uploads-list.jpg)
-*EC2 listing S3 files — report2.txt (97B), report1.txt (106B), report3.txt (134B)*
+### 8.3 Bob Testing (Read-Only)
 
-```bash
-aws s3 ls s3://secure-corp-storage/
-# 2026-01-31 10:23:45     97 report2.txt
-# 2026-01-31 10:24:12    106 report1.txt
-# 2026-01-31 10:25:33    134 report3.txt
-```
+Bob uses the `s3-read-only` role, which only has `s3:ListBucket` and `s3:GetObject`.
 
-### Scenario 5: Alice Upload (PASS ✅)
-
-Alice can upload files after assuming her role:
-
-```bash
-# Alice assumes her role
-aws sts assume-role \
-  --role-arn arn:aws:iam::ACCOUNT_ID:role/s3-read-write-get \
-  --role-session-name alice-session \
-  --serial-number arn:aws:iam::ACCOUNT_ID:mfa/Alice-developer \
-  --token-code 123456
-
-# Upload with temporary credentials
-aws s3 cp Data-report.csv s3://secure-corp-storage/Data-report.csv
-# upload: ./Data-report.csv to s3://secure-corp-storage/Data-report.csv ✅
-```
-
-### Scenario 6: Alice Download (PASS ✅)
-
-Alice can download any file:
-
-```bash
-aws s3 cp s3://secure-corp-storage/report1.txt ./report1.txt
-# download: s3://secure-corp-storage/report1.txt to ./report1.txt ✅
-```
-
-### Scenario 7: Alice Delete (DENIED ❌)
-
-Alice cannot delete (no `s3:DeleteObject` in her policy):
-
-```bash
-aws s3 rm s3://secure-corp-storage/report1.txt
-# An error occurred (AccessDenied) when calling the DeleteObject operation: Access Denied ❌
-```
-
-### Scenario 8: Bob Download (PASS ✅)
-
-Bob can download files:
+#### ✅ Bob — Can Download Files
 
 ```bash
 # Bob assumes his read-only role
@@ -557,49 +622,66 @@ aws sts assume-role \
   --serial-number arn:aws:iam::ACCOUNT_ID:mfa/Bob-viewer \
   --token-code 654321
 
+# Download succeeds
 aws s3 cp s3://secure-corp-storage/report3.txt ./report3.txt
 # download: s3://secure-corp-storage/report3.txt to ./report3.txt ✅
 ```
 
-### Scenario 9: Bob Upload/Delete (DENIED ❌)
-
-Bob cannot upload or delete:
+#### ❌ Bob — Cannot Upload (AccessDenied)
 
 ```bash
 aws s3 cp newfile.txt s3://secure-corp-storage/
 # An error occurred (AccessDenied) when calling the PutObject operation: Access Denied ❌
-
-aws s3 rm s3://secure-corp-storage/report3.txt
-# An error occurred (AccessDenied) when calling the DeleteObject operation: Access Denied ❌
 ```
 
-*S3 console confirmation — report3.txt access denied for Bob:*
+#### ❌ Bob — Cannot Access report3.txt via Console (shown below)
 
-![S3 Access Denied](../images/04-s3-bucket-contents.jpg)
-*Bob attempting to access report3.txt — Access Denied as expected (read-only enforced)*
+![Bob Access Denied on report3.txt](../images/Screenshot%202026-04-08%20224920.png)
+*S3 console showing `report3.txt` (134 B, text/plain) with status `Failed — Access denied`. Bob's read-only role cannot perform this specific console operation on this file.*
 
 ---
 
-## 10. Summary
+### 8.4 Test Results Summary
 
-### What We Built
+| Test | Identity | Operation | Expected | Result |
+|:---|:---|:---|:---:|:---:|
+| List bucket objects | EC2 | `aws s3 ls` | ✅ Allow | ✅ PASS |
+| Download a file | EC2 | `aws s3 cp` (GET) | ✅ Allow | ✅ PASS |
+| Upload a file | EC2 | `aws s3 cp` (PUT) | ✅ Allow | ✅ PASS |
+| Delete a file | EC2 | `aws s3 rm` | ❌ Deny | ❌ DENIED |
+| See bucket | Alice | Console list | ✅ Allow | ✅ PASS |
+| See files | Alice | Console object list | ✅ Allow | ✅ PASS |
+| Download a file | Alice | `aws s3 cp` (GET) | ✅ Allow | ✅ PASS |
+| Delete a file | Alice | `aws s3 rm` | ❌ Deny | ❌ DENIED |
+| Download a file | Bob | `aws s3 cp` (GET) | ✅ Allow | ✅ PASS |
+| Upload a file | Bob | `aws s3 cp` (PUT) | ❌ Deny | ❌ DENIED |
+| Delete a file | Bob | `aws s3 rm` | ❌ Deny | ❌ DENIED |
+
+**All 11 test scenarios passed. ✅**
+
+---
+
+## 9. Summary
+
+### What Was Built
 
 | Component | Details |
-|---|---|
-| S3 Bucket | `secure-corp-storage` in us-east-1 with versioning, encryption, lifecycle |
-| IAM Users | `Alice-developer` (read-write) and `Bob-viewer` (read-only) |
-| IAM Roles | `s3-read-write-get`, `s3-read-only`, `ec2-s3-access-role` |
-| EC2 | Instance profile with temporary credentials, no hardcoded keys |
-| ALB | Multi-AZ application load balancer routing to EC2 |
+|:---|:---|
+| **S3 Bucket** | `secure-corp-storage` — us-east-1, versioning + SSE-S3 + lifecycle |
+| **IAM Users** | `Alice-developer` (read-write) and `Bob-viewer` (read-only) |
+| **IAM Roles** | `s3-read-write-get`, `s3-read-only`, `ec2-s3-access-role` |
+| **EC2 Instance** | `s3-cli-host` with instance profile — no hardcoded credentials |
+| **ALB** | `secure-s3-alb` — multi-AZ (us-east-1a + us-east-1d), internet-facing |
 
-### Security Guarantees
+### Security Guarantees Verified
 
-- ✅ No identity can delete S3 objects
-- ✅ No public access to the bucket
-- ✅ All EC2 credentials are temporary (IAM role)
-- ✅ MFA required for Alice and Bob to assume roles
-- ✅ All actions are logged in CloudTrail
+- ✅ **No identity can delete S3 objects** — `s3:DeleteObject` absent from all policies
+- ✅ **S3 bucket is fully private** — all public access blocked
+- ✅ **EC2 uses temporary credentials** — IAM instance profile, no static keys
+- ✅ **MFA required** for Alice and Bob to assume their roles
+- ✅ **Least privilege enforced** — each role has only the minimum permissions needed
+- ✅ **Lifecycle policy active** — automatic cost optimization and data retention
 
 ---
 
-*Next: See [02-SECURITY-IMPROVEMENTS.md](02-SECURITY-IMPROVEMENTS.md) for production hardening recommendations.*
+*Next: See [02-SECURITY-IMPROVEMENTS.md](02-SECURITY-IMPROVEMENTS.md) for 8 production security hardening recommendations.*
